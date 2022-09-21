@@ -1,0 +1,314 @@
+---
+title: "Evaluate ML predictions"
+author: "Parker Cherrington"
+date: "2022-08-02"
+output: html_document
+---
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(tidyverse)
+library(stringr)
+
+# Round output floats to 4 decimal places
+options(digits = 5)
+```
+
+```{r}
+# Read in the data
+input_data <- read_csv("ML sample output.csv", col_names = TRUE, show_col_types = FALSE)
+# To see more info about the data frame as it is read in, remove the show_col_types argument
+#  Maybe rename that sheet to be something like 'Testing data and results'
+```
+
+## Defining functions
+
+This chunk is designed to find the best cutoff value. It creates a confusion matrix to determine how accurate the machine learning model was. The confusion matrix counts the times the model predicted a value higher or lower than a certain cutoff value, and compares that to the actual results of the data. In this case, that is the number of comments that actually fit in the right category.
+
+The evaluation metrics are percent correctly-classified (PCC), specificity, sensitivity, and false positives. The Evaluate_Cutoff function takes in a user-defined cutoff value, creates a confusion matrix, and returns each metric from the confusion matrix.
+
+The get_pcc function returns the accuracy or percent correctly-classified metric specifically, also based off of a user-defined cutoff value.
+
+The find_best_cutoff function makes use of both of these functions as it loops through every possible cutoff value. It returns the cutoff value that yields the highest percent correctly classified, and that percentage.
+
+
+```{r}
+#Function that returns every metric of analysis 
+Evaluate_Cutoff <- function(data = input_data,
+                            reference = input_data$`Activities Reality`,
+                            predicted = input_data$`Learning Activities`,
+                            cutoff = 0.5){
+  if (cutoff == 1){
+    cutoff = 0.99999
+  }
+  ref_table <- ifelse(reference >= cutoff, "P", "N")
+  pred_table <- ifelse(predicted > cutoff, "P", "N")
+  cross_table <- table(pred_table, ref_table)
+  PCC <- (cross_table[1,1] + cross_table[2,2]) / sum(cross_table)
+  specificity <- cross_table[1,1] / (cross_table[1,1] + cross_table[2,1])
+  sensitivity <- cross_table[2,2] / (cross_table[2,2] + cross_table[1,2])
+  false_positives <- cross_table[2,1] / sum(cross_table)
+  summary_table <- c(cutoff, PCC, specificity, sensitivity, false_positives)
+  names(summary_table) <- c("Cutoff Value", "Accuracy", "Specificity", "Sensitivity", "False Positives")
+  #make a list that outputs each of these metrics
+  return(summary_table)
+}
+
+get_pcc <- function(data = input_data,
+                    predicted = input_data$`Activities Reality`,
+                    reference = input_data$`Learning Activities`,
+                    cutoff = 0.5) {
+    # True Positives
+    TP <- nrow(filter(data, reference == 1 & predicted > cutoff, na.rm = TRUE))
+    # False Positives
+    FP <- nrow(filter(data, reference == 0 & predicted > cutoff, na.rm = TRUE))
+    # False Negatives
+    FN <- nrow(filter(data, reference == 1 & predicted < cutoff, na.rm = TRUE))
+    # True Negatives
+    TN <- nrow(filter(data, reference == 0 & predicted < cutoff, na.rm = TRUE))
+    PCC <- (TP + TN) / sum(TP, FP, FN, TN)
+    return(PCC)
+}
+
+
+find_best_cutoff <- function(data = input_data,
+                               predicted = input_data$Sentiment,
+                               reality = input_data$`Sentiment Reality`){
+  max_val <- 0
+  best_cutoff <- 0
+  cutoffs <- seq(0, 1, length = 1000)
+  for (i in 1:length(cutoffs)){
+    next_val <- get_pcc(data = data, predicted = predicted,
+                        reference = reality, cutoff = cutoffs[i])
+    if (next_val > max_val){
+      max_val <- next_val
+      best_cutoff <- cutoffs[i]
+    }
+  }
+  return(best_cutoff)
+}
+```
+
+## Get results
+This code chunk is the bulk of this script. It creates various lists and compiles those lists into a new data frame. This dataframe will be used by another script to determine which values should be considered positive or not. For example, if this program determines that the best cutoff value for Course Structure predictions should be 0.85, then even if the machine learning model predicts that a certain comment is associated with course structure with 84% confidence, that comment is determined NOT to be a course structure comment.
+
+After finding the best cutoff value for each category, that value is added to the data frame, along with the accuracy rate and the false positive rate. The other evaluation metrics are also printed out as the new cutoff value is found.
+
+```{r}
+# Make a new data frame that will just have the Category names and the best cutoff associated with each
+
+# This code chunk can take up to 10 minutes to run, as it is trying out 1000s of possible cutoff values to find the optimal one.
+category <- c('Sentiment', 'Learning Activities', 'Learning Materials', 'Course Structure',
+              'Instructor/TAs', 'Communication', 'Community', 'Learning Objectives',
+              'Learning Technology', 'General')
+category_ref <- c('Sentiment Reality', 'Activities Reality', 'Materials Reality',
+                  'Structure Reality', 'Instructors Reality', 'Communication Reality',
+                  'Community Reality', 'Objectives Reality', 'Technology Reality', 
+                  'General Reality')
+cutoff_list <- rep(NA, length(category))
+FalsePos <- rep(NA, length(category))
+PCC <- rep(NA, length(category))
+
+for (i in 1:length(category)){
+  print(category[i])
+  predicted_column <- input_data[, category[i]]
+  reference_column <- input_data[, category_ref[i]]
+  
+  current_max <- find_best_cutoff(data = input_data, predicted = predicted_column,
+                     reality = reference_column)
+  current_output <- Evaluate_Cutoff(data = input_data, reference = reference_column,
+                                    predicted = predicted_column,
+                                    cutoff = current_max)
+  print(current_output)
+  
+  PCC[i] <- current_output[2]
+  FalsePos[i] <- current_output[5]
+  cutoff_list[i] <- current_max
+}
+
+cutoffs_data <- data.frame(Category = category, Cutoff = cutoff_list,
+                           Accuracy = PCC, FalsePositives = FalsePos)
+
+```
+
+```{r}
+# Export the new data frame into a .csv file that will be read by the python script that uses the model to make predictions.
+
+write.csv(cutoffs_data, "Best Cutoffs.csv")
+
+# This is the last essential part of the script
+```
+
+## Extra stuff
+All of the code listed from this point on is extra stuff. To this point, everything that the script is meant to do has been accomplished. Everything else is for EDA and includes some other versions of the find_best_cutoff function that may be more efficient than the current function if tweaked just a little.
+
+find_best_cutoff_2 aims to do the same thing as find_best_cutoff, but it uses recursion in an effort to be more efficient. It operates on the assumption that a higher or lower cutoff will in turn yield higher or lower accuracy scores. This is not always the case and so it wasn't used.
+
+find_best_cutoff_3 creates a list of length 1000 that represents each possible accuracy score, then returns the maximum value from that list. The problem is that sometimes there are multiple possible cutoff values that yield the highest accuracy score, so in those cases, this function returns NA.
+
+get_results can be very useful, as it shows the evaluation metrics at cutoff = 0.5, finds the best possible cutoff value, shows the metrics with that new cutoff, and calculates the difference to see how helpful the optimized cutoff value is. It was originally made to be added to a new data frame, so if you just want to look at the results, you can change that function to print out the lists instead of return them.
+
+print_a_table shows the confusion matrix itself, in case you want to analyze the number of 1s and 0s themselves.
+
+The rest of the code chunks are calls of the functions used above, and were used to look at preliminary results.
+
+To comment out or un-comment large chunks of code, highlight the area and hit ctrl+shift+c.
+
+```{r}
+# find_best_cutoff_2 <- function(data = input_data,
+#                              predicted = input_data$Sentiment,
+#                              reality = input_data$`Sentiment Reality`,
+#                              cutoff = 0.5){
+#   current_val <- get_pcc(data, predicted, reference = reality, cutoff = cutoff)
+#   higher_cut <- cutoff + 0.001
+#   higher_val <- get_pcc(data, predicted, reference = reality, cutoff = higher_cut)
+#   lower_cut <- cutoff - 0.001
+#   lower_val <- get_pcc(data, predicted, reference = reality, cutoff = lower_cut)
+#   cutoffs <- c(current_val, higher_val, lower_val)
+#   
+#   if (max(cutoffs) == higher_val){
+#     find_best_cutoff_2(data, predicted, reality, cutoff = higher_cut)
+#   }
+#   else if (max(cutoffs) == lower_val) {
+#     find_best_cutoff_2(data, predicted, reality, cutoff = lower_cut)
+#   }
+#   else{
+#     return(current_val)
+#   }
+# }
+
+# find_best_cutoff_3 <- function(data = input_data,
+#                              predicted = input_data$`Activities Reality`,
+#                              reference = input_data$`Learning Activities`)  {
+#   all_cutoffs <- seq(from = 0, to = 1, by = 0.001)
+#   PCC_vector <- 0
+#   for (i in all_cutoffs) {
+#     new_vec_item <- get_pcc(data, predicted, reference, cutoff = i)
+#     PCC_vector <- c(PCC_vector, new_vec_item)
+#   }
+#   best_cutoff <- all_cutoffs[which.max(PCC_vector)]
+#   return(best_cutoff)
+# }
+
+# # Function that does it all together
+# get_results <- function(df, predict, response){
+#   default <- Evaluate_Cutoff(data = df,
+#                              predicted = predict,
+#                              reference = response,
+#                              cutoff = 0.5)
+#   print(default)
+#   best_cutoff <- find_best_cutoff(data = df,
+#                                 predicted = predict,
+#                                 reality = response)
+#   print(best_cutoff)
+#   optimized <- Evaluate_Cutoff(data = df,
+#                                predicted = predict,
+#                                reference = response,
+#                                cutoff = best_cutoff)
+#   
+#   difference <- optimized - default
+#   return(c(default, optimized, difference))
+# }
+
+#Function that shows a confusion matrix table
+print_a_table <- function(data = input_data,
+                          reference = input_data$`Activities Reality`,
+                          predicted = input_data$`Learning Activities`,
+                          cutoff = 0.5) {
+  ref_table <- ifelse(reference >= cutoff, "P", "N")
+  pred_table <- ifelse(predicted > cutoff, "P", "N")
+  cross_table <- table(pred_table, ref_table)
+  return(cross_table)
+}
+
+```
+
+```{r eval=FALSE, include=FALSE}
+# Test which of the three functions works the best
+find_best_cutoff_3(data = input_data, predicted = input_data$Sentiment,
+                 reference = input_data$`Sentiment Reality`) # Function that makes a list
+find_best_cutoff_2(data = input_data, predicted = input_data$Sentiment,
+                   reality = input_data$`Sentiment Reality`, cutoff = 0.5) # Recursive function
+find_best_cutoff(data = input_data, predicted = input_data$`Learning Activities`,
+                   reality = input_data$`Activities Reality`) # For loop + replace max value method
+```
+
+This chunk is a way to change the cutoff values by hand and see what changes that makes.
+```{r eval=FALSE, include=FALSE}
+print('Sentiment')
+Evaluate_Cutoff(data = input_data, reference = input_data$`Sentiment Reality`, predicted = input_data$Sentiment, cutoff = 0.99)
+print('Learning Activities')
+Evaluate_Cutoff(data = input_data, reference = input_data$`Activities Reality`, predicted = input_data$`Learning Activities`, cutoff = 0.99)
+print('Learning Technology')
+Evaluate_Cutoff(data = input_data, reference = input_data$`Technology Reality`, predicted = input_data$`Learning Technology`, cutoff = 0.99)
+print('Course Structure')
+Evaluate_Cutoff(data = input_data, reference = input_data$`Structure Reality`, predicted = input_data$`Course Structure`, cutoff = 0.99)
+print('Communication')
+Evaluate_Cutoff(data = input_data, reference = input_data$`Communication Reality`, predicted = input_data$Communication, cutoff = 0.99)
+print('Learning Materials')
+Evaluate_Cutoff(data = input_data, reference = input_data$`Materials Reality`, predicted = input_data$`Learning Materials`, cutoff = 0.99)
+print('Learning Objectives')
+Evaluate_Cutoff(data = input_data, reference = input_data$`Objectives Reality`, predicted = input_data$`Learning Objectives`, cutoff = 0.99)
+print('Community')
+Evaluate_Cutoff(data = input_data, reference = input_data$`Community Reality`, predicted = input_data$Community, cutoff = 0.99)
+print('General')
+Evaluate_Cutoff(data = input_data, reference = input_data$`General Reality`, predicted = input_data$General, cutoff = 0.99)
+print('Instructor/TAs')
+Evaluate_Cutoff(data = input_data, reference = input_data$`Instructors Reality`, predicted = input_data$`Instructor/TAs`, cutoff = 0.2723)
+```
+
+This chunk does the same thing as above, but also calculates the difference. As a whole this one takes a little longer to run, so it is reccommended to run one category at a time if desired.
+```{r eval=FALSE, include=FALSE}
+print('Sentiment')
+get_results(df = input_data, predict = input_data$Sentiment, response = input_data$`Sentiment Reality`)
+print('Learning Activities')
+get_results(df = input_data, predict = input_data$`Learning Activities`,
+            response = input_data$`Activities Reality`)
+print('Learning Technology')
+get_results(df = input_data, predict = input_data$`Learning Technology`,
+            response = input_data$`Technology Reality`)
+print('Course Structure')
+get_results(df = input_data, predict = input_data$`Course Structure`, 
+            response = input_data$`Structure Reality`)
+print('Communication')
+get_results(df = input_data, predict = input_data$Communication,
+            response = input_data$`Communication Reality`)
+print('Learning Materials')
+get_results(df = input_data, predict = input_data$`Learning Materials`,
+            response = input_data$`Materials Reality`)
+print('Learning Objectives')
+```
+
+
+```{r eval=FALSE, include=FALSE}
+get_results(df = input_data, predict = input_data$`Learning Objectives`,
+            response = input_data$`Objectives Reality`)
+print('Community')
+get_results(df = input_data, predict = input_data$Community,
+            response = input_data$`Community Reality`)
+print('General')
+get_results(df = input_data, predict = input_data$General,
+            response = input_data$`General Reality`)
+print('Instructor/TAs')
+get_results(df = input_data, predict = input_data$`Instructor/TAs`,
+            response = input_data$`Instructors Reality`)
+```
+
+See how different cutoff values change the evaluation metrics for the same category.
+```{r eval=FALSE, include=FALSE}
+Evaluate_Cutoff(data = input_data, reference = input_data$`Activities Reality`, predicted = input_data$`Learning Activities`, cutoff = 0.99)
+Evaluate_Cutoff(data = input_data, reference = input_data$`Activities Reality`, predicted = input_data$`Learning Activities`, cutoff = 0.999)
+Evaluate_Cutoff(data = input_data, reference = input_data$`Activities Reality`, predicted = input_data$`Learning Activities`, cutoff = 0.9999)
+Evaluate_Cutoff(data = input_data, reference = input_data$`Communication Reality`, predicted = input_data$`Communication`, cutoff = 0.5)
+Evaluate_Cutoff(data = input_data, reference = input_data$`Communication Reality`, predicted = input_data$`Communication`, cutoff = 0.001)
+Evaluate_Cutoff(data = input_data, reference = input_data$`Communication Reality`, predicted = input_data$`Communication`, cutoff = 1)
+```
+
+```{r}
+print_a_table(data = input_data, reference = input_data$`Technology Reality`,
+              predicted = input_data$`Learning Technology`, cutoff = )
+
+
+```
+
