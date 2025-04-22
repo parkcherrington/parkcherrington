@@ -1,6 +1,7 @@
 - 👋 Hi, I’m @parkcherrington
+- 🏫 I graduated from Brigham Young University in December of 2022 with a degree in Statistics (Data Science emphasis).
+- 📊 I have 2 years of experience as a Data Analyst.
 - 👀 I’m interested in python, data analytics, and machine learning.
-- 🌱 I’m currently learning about github, data visualization, and machine learning
 - 📲 You can reach me at @parkcherrington on Twitter, or @parker-cherrington on LinkedIn.
 
 This repository contains some of the programs that I have written for my job at BYU Online. Here is a summary of each one.
